@@ -62,20 +62,13 @@ const retryBtn        = document.getElementById('retry-btn');
 let activeEventSource = null;
 let progressInterval  = null;
 let fakeProgress      = 0;
-let previewPlayer     = null;
-let previewVideoId    = null;
 let previewReady      = false;
-let previewPendingSeek = 3;
 let previewDurationLimit = 0;
 let previewLoopActive = false;
-let previewLoopTimer  = null;
 let previewMuted      = true;
-
-window.onYouTubeIframeAPIReady = () => {
-  if (previewVideoId) {
-    ensurePreviewPlayer(previewVideoId);
-  }
-};
+let previewRequestTimer = null;
+let previewAbortController = null;
+let currentPreviewSourceUrl = '';
 
 // ── Helpers ────────────────────────────────────────────────
 function show(el)  { el.classList.remove('hidden'); }
@@ -133,17 +126,13 @@ function updateRangeVisuals() {
 
 function stopPreviewLoop() {
   previewLoopActive = false;
-  if (previewLoopTimer) {
-    window.clearInterval(previewLoopTimer);
-    previewLoopTimer = null;
-  }
 
   previewLoopLabel.textContent = 'Play clip';
   previewLoopToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', 'play');
   lucide.createIcons();
 
-  if (previewPlayer && previewReady) {
-    previewPlayer.pauseVideo();
+  if (previewReady) {
+    previewPlayerHost.pause();
   }
 }
 
@@ -152,14 +141,13 @@ function updatePreviewSoundUI() {
   previewSoundToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', previewMuted ? 'volume-x' : 'volume-2');
   lucide.createIcons();
 
-  if (previewPlayer && previewReady) {
-    if (previewMuted) previewPlayer.mute();
-    else previewPlayer.unMute();
+  if (previewReady) {
+    previewPlayerHost.muted = previewMuted;
   }
 }
 
 function startPreviewLoop() {
-  if (!previewPlayer || !previewReady) return;
+  if (!previewReady) return;
 
   const start = Number(beginTimeRange.value || 0);
   const end = Number(endTimeRange.value || start + 1);
@@ -171,35 +159,20 @@ function startPreviewLoop() {
   lucide.createIcons();
 
   previewPlaceholder.classList.add('hidden');
-  previewPlayer.seekTo(start, true);
-  if (previewMuted) previewPlayer.mute();
-  else previewPlayer.unMute();
-  previewPlayer.playVideo();
-
-  previewLoopTimer = window.setInterval(() => {
-    if (!previewPlayer || !previewReady || !previewLoopActive) return;
-    const current = previewPlayer.getCurrentTime();
-    if (current >= end) {
-      previewPlayer.seekTo(start, true);
-      previewPlayer.playVideo();
-    }
-  }, 150);
+  previewPlayerHost.currentTime = start;
+  previewPlayerHost.muted = previewMuted;
+  previewPlayerHost.play().catch(() => {
+    stopPreviewLoop();
+  });
 }
 
 function refreshPreviewFrame(second) {
-  previewPendingSeek = second;
   stopPreviewLoop();
 
-  if (previewPlayer && previewReady) {
+  if (previewReady) {
     previewPlayerHost.classList.remove('hidden');
-    previewPlayer.seekTo(second, true);
-    previewPlayer.mute();
-    previewPlayer.playVideo();
-    window.setTimeout(() => {
-      if (!previewPlayer) return;
-      previewPlayer.pauseVideo();
-      previewPlayer.seekTo(second, true);
-    }, 120);
+    previewPlayerHost.currentTime = second;
+    previewPlayerHost.pause();
   }
 }
 
@@ -222,10 +195,13 @@ function setPreviewDuration(duration) {
 function resetPreview() {
   hide(previewPanel);
   previewPlayerHost.classList.add('hidden');
+  previewPlayerHost.pause();
+  previewPlayerHost.removeAttribute('src');
+  previewPlayerHost.load();
   previewReady = false;
-  previewPendingSeek = 3;
   previewDurationLimit = 0;
   previewMuted = true;
+  currentPreviewSourceUrl = '';
   stopPreviewLoop();
   beginTimeRange.max = '0';
   endTimeRange.max = '0';
@@ -240,79 +216,6 @@ function resetPreview() {
   `;
   lucide.createIcons();
   updatePreviewSoundUI();
-
-  if (previewPlayer) {
-    previewPlayer.stopVideo();
-    previewPlayer.destroy();
-    previewPlayer = null;
-  }
-}
-
-function ensurePreviewPlayer(videoId) {
-  if (!window.YT || !window.YT.Player) return;
-
-  previewReady = false;
-  previewPendingSeek = Number(beginTimeInput.value || 3);
-  previewVideoId = videoId;
-
-  if (previewPlayer) {
-    previewPlayer.destroy();
-    previewPlayer = null;
-  }
-
-  previewPlayer = new window.YT.Player('video-player', {
-    videoId,
-    playerVars: {
-      autoplay: 0,
-      controls: 1,
-      modestbranding: 1,
-      rel: 0,
-      playsinline: 1,
-      start: previewPendingSeek,
-    },
-    events: {
-      onReady: (event) => {
-        const iframe = event.target.getIframe();
-        iframe.classList.remove('hidden');
-        iframe.classList.add('w-full', 'h-full');
-        previewReady = true;
-        previewPlayerHost.classList.remove('hidden');
-        previewPlaceholder.classList.add('hidden');
-        setPreviewDuration(event.target.getDuration());
-        updatePreviewSoundUI();
-        refreshPreviewFrame(previewPendingSeek);
-      },
-      onStateChange: (event) => {
-        if (event.data === window.YT.PlayerState.CUED) {
-          setPreviewDuration(event.target.getDuration());
-          refreshPreviewFrame(previewPendingSeek);
-        }
-      },
-    },
-  });
-}
-
-function updateVideoPreview() {
-  const value = urlInput.value.trim();
-  if (!value || !validateUrl(value)) {
-    resetPreview();
-    return;
-  }
-
-  const videoId = extractYouTubeVideoId(value);
-  if (!videoId) {
-    resetPreview();
-    return;
-  }
-
-  show(previewPanel);
-  previewPlaceholder.classList.remove('hidden');
-
-  if (previewVideoId !== videoId) {
-    ensurePreviewPlayer(videoId);
-  } else if (previewPlayer && previewReady) {
-    refreshPreviewFrame(Number(beginTimeRange.value || 0));
-  }
 }
 
 function handleStartRangeInput() {
@@ -431,7 +334,7 @@ urlInput.addEventListener('input', () => {
   } else {
     urlError.classList.add('hidden');
   }
-  updateVideoPreview();
+  queuePreviewLoad();
 });
 
 beginTimeRange.addEventListener('input', handleStartRangeInput);
@@ -450,6 +353,77 @@ previewSoundToggle.addEventListener('click', () => {
 
 updateRangeVisuals();
 updatePreviewSoundUI();
+
+previewPlayerHost.addEventListener('loadedmetadata', () => {
+  previewReady = true;
+  previewPlayerHost.classList.remove('hidden');
+  previewPlaceholder.classList.add('hidden');
+  setPreviewDuration(previewPlayerHost.duration);
+  updatePreviewSoundUI();
+  refreshPreviewFrame(Number(beginTimeRange.value || 0));
+});
+
+previewPlayerHost.addEventListener('timeupdate', () => {
+  if (previewLoopActive) {
+    const start = Number(beginTimeRange.value || 0);
+    const end = Number(endTimeRange.value || start + 1);
+    if (previewPlayerHost.currentTime >= end) {
+      previewPlayerHost.currentTime = start;
+      previewPlayerHost.play().catch(() => {
+        stopPreviewLoop();
+      });
+    }
+  }
+});
+
+async function loadPreview(url) {
+  if (previewAbortController) {
+    previewAbortController.abort();
+  }
+
+  previewAbortController = new AbortController();
+  previewReady = false;
+  show(previewPanel);
+  previewPlayerHost.classList.add('hidden');
+  previewPlaceholder.classList.remove('hidden');
+  previewPlaceholder.querySelector('div').lastChild.textContent = 'Preparing preview';
+
+  try {
+    const res = await fetch('/api/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal: previewAbortController.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to prepare preview');
+    if (urlInput.value.trim() !== url) return;
+
+    currentPreviewSourceUrl = url;
+    previewPlayerHost.src = `${data.previewUrl}?t=${Date.now()}`;
+    previewPlayerHost.load();
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    previewPlaceholder.querySelector('div').lastChild.textContent = 'Preview unavailable';
+  }
+}
+
+function queuePreviewLoad() {
+  const value = urlInput.value.trim();
+  if (!value || !validateUrl(value)) {
+    if (previewRequestTimer) clearTimeout(previewRequestTimer);
+    if (previewAbortController) previewAbortController.abort();
+    resetPreview();
+    return;
+  }
+
+  if (previewRequestTimer) clearTimeout(previewRequestTimer);
+  previewRequestTimer = window.setTimeout(() => {
+    if (value !== currentPreviewSourceUrl) {
+      loadPreview(value);
+    }
+  }, 500);
+}
 
 // ── Form submit ────────────────────────────────────────────
 form.addEventListener('submit', async (e) => {
