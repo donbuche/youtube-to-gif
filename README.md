@@ -15,7 +15,8 @@ A web application to convert YouTube videos into animated GIFs — right from yo
 ## Features
 
 - **One-click conversion** — paste a YouTube URL and hit convert
-- **Full option control** — FPS, dimensions, start offset, duration and output filename
+- **Full option control** — FPS, dimensions, clip range and output filename
+- **Local video preview** — scrub and loop the selected clip before generating the GIF
 - **Live log terminal** — real-time conversion output streamed via Server-Sent Events (SSE)
 - **GIF preview** — inline preview and one-click download when done
 - **Modern UI** — Tailwind CSS interface with dark/light mode toggle and smooth animations
@@ -58,7 +59,7 @@ brew install ffmpeg yt-dlp
 
 ```bash
 # 1. Clone and install dependencies
-git clone https://github.com/your-username/youtube-to-gif.git
+git clone https://github.com/donbuche/youtube-to-gif.git
 cd youtube-to-gif
 npm install
 
@@ -93,12 +94,11 @@ The UI exposes the conversion settings supported by the app:
 | Option | Description | Default |
 |---|---|---|
 | **URL** | YouTube video URL | *(required)* |
-| **FPS** | Frames per second of the output GIF | `30` |
+| **FPS** | Frames per second of the output GIF | `20` |
 | **Size** | Output dimensions (e.g. `640x360`) | `640x360` |
-| **Start offset** | Skip the first N seconds of the video | `3` |
-| **Duration** | Length of the GIF in seconds | `15` |
+| **Clip range** | Start and end points selected with the dual range slider | full preview duration |
 | **Output filename** | Custom name for the `.gif` file | auto-generated |
-| **Verbose** | Show full process output in the log terminal | off |
+| **Detailed logs** | Show full process output in the log terminal | on |
 
 Generated GIFs are saved to the `./output/` directory and served statically.
 
@@ -111,8 +111,9 @@ youtube-to-gif/
 ├── assets/
 │   └── screenshot.png               # README screenshot
 ├── public/
-│   ├── index.html                   # UI — Tailwind CSS, dark/light mode, form
-│   └── app.js                       # Client-side logic — form handling, SSE, state
+│   ├── favicon.ico                  # App favicon
+│   ├── index.html                   # UI — preview player, form, results, footer
+│   └── app.js                       # Client-side logic — form, preview, SSE, state
 ├── output/                          # Generated GIF files (git-ignored)
 ├── server.js                        # Express server — REST API + SSE streaming
 ├── yt-dlp-cookies.txt               # Optional Netscape cookies file (git-ignored)
@@ -134,6 +135,8 @@ yt-dlp                  ← resolves the downloadable media URL
   │
   ▼
 temporary local video   ← downloaded by yt-dlp with the active auth strategy
+  │
+  ├─► /api/preview      ← served to the browser as a local HTML5 <video> preview
   │
   ▼
 ffmpeg                  ← trims, scales and encodes the GIF
@@ -158,10 +161,11 @@ npm run start:chrome
 
 ## Notes
 
-- Output GIFs are **not** git-tracked (`output/` is in `.gitignore`). Files are ephemeral and cleaned up after 10 minutes by the server.
+- Output GIFs are **not** git-tracked (`output/` is in `.gitignore`).
 - Some YouTube videos require authenticated cookies for `yt-dlp`. You can place a Netscape-format cookies file at `./yt-dlp-cookies.txt` or set `YT_DLP_COOKIES_FILE` to another path before starting the server.
 - For bot-protected videos, browser cookies are often more reliable than an exported `cookies.txt`. In local mode, use `npm run start:chrome`.
 - The app downloads a temporary local source file before invoking `ffmpeg`, which avoids HLS segment `403` errors from protected YouTube manifests.
+- The clip preview is also generated from a temporary local download and exposed through `/api/preview/*`. These preview temp files are cleaned up automatically after 30 minutes.
 
 ---
 

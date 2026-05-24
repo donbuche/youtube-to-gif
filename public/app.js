@@ -25,6 +25,23 @@ const btnText         = document.getElementById('btn-text');
 const btnIcon         = document.getElementById('btn-icon');
 const urlInput        = document.getElementById('url');
 const urlError        = document.getElementById('url-error');
+const previewPanel    = document.getElementById('video-preview-panel');
+const previewPlayerHost = document.getElementById('video-player');
+const previewPlaceholder = document.getElementById('video-preview-placeholder');
+const beginTimeInput  = document.getElementById('beginTime');
+const beginTimeRange  = document.getElementById('beginTimeRange');
+const endTimeRange    = document.getElementById('endTimeRange');
+const beginTimeValue  = document.getElementById('beginTimeValue');
+const beginTimeMax    = document.getElementById('beginTimeMax');
+const rangeSelection  = document.getElementById('rangeSelection');
+const rangeStartLabel = document.getElementById('rangeStartLabel');
+const rangeDurationLabel = document.getElementById('rangeDurationLabel');
+const rangeEndLabel   = document.getElementById('rangeEndLabel');
+const durationInput   = document.getElementById('duration');
+const previewLoopToggle = document.getElementById('preview-loop-toggle');
+const previewLoopLabel  = document.getElementById('preview-loop-label');
+const previewSoundToggle = document.getElementById('preview-sound-toggle');
+const previewSoundLabel  = document.getElementById('preview-sound-label');
 
 const progressCard    = document.getElementById('progress-card');
 const logOutput       = document.getElementById('log-output');
@@ -45,10 +62,191 @@ const retryBtn        = document.getElementById('retry-btn');
 let activeEventSource = null;
 let progressInterval  = null;
 let fakeProgress      = 0;
+let previewReady      = false;
+let previewDurationLimit = 0;
+let previewLoopActive = false;
+let previewMuted      = true;
+let previewRequestTimer = null;
+let previewAbortController = null;
+let currentPreviewSourceUrl = '';
 
 // ── Helpers ────────────────────────────────────────────────
 function show(el)  { el.classList.remove('hidden'); }
 function hide(el)  { el.classList.add('hidden'); }
+
+function formatSeconds(value) {
+  const total = Math.max(0, Math.floor(Number(value) || 0));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes > 0 ? `${minutes}:${String(seconds).padStart(2, '0')}` : `${seconds}s`;
+}
+
+function extractYouTubeVideoId(value) {
+  try {
+    const url = new URL(value);
+    if (url.hostname.includes('youtu.be')) {
+      return url.pathname.slice(1) || null;
+    }
+    if (url.hostname.includes('youtube.com')) {
+      if (url.pathname === '/watch') {
+        return url.searchParams.get('v');
+      }
+      const parts = url.pathname.split('/').filter(Boolean);
+      const embedIndex = parts.findIndex((part) => part === 'embed' || part === 'shorts' || part === 'live');
+      if (embedIndex !== -1 && parts[embedIndex + 1]) {
+        return parts[embedIndex + 1];
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function updateRangeVisuals() {
+  const max = Math.max(0, Number(beginTimeRange.max) || 0);
+  const start = Math.max(0, Number(beginTimeRange.value) || 0);
+  const end = Math.min(max, Math.max(start + 1, Number(endTimeRange.value) || start + 1));
+  const duration = Math.max(1, end - start);
+
+  beginTimeInput.value = String(start);
+  durationInput.value = String(duration);
+  beginTimeValue.textContent = formatSeconds(start);
+  beginTimeMax.textContent = formatSeconds(previewDurationLimit || max);
+  rangeStartLabel.textContent = `Start ${formatSeconds(start)}`;
+  rangeEndLabel.textContent = `End ${formatSeconds(end)}`;
+  rangeDurationLabel.textContent = `Duration ${formatSeconds(duration)}`;
+
+  const denominator = max || 1;
+  const startPercent = (start / denominator) * 100;
+  const endPercent = (end / denominator) * 100;
+  rangeSelection.style.left = `${startPercent}%`;
+  rangeSelection.style.width = `${Math.max(endPercent - startPercent, 0)}%`;
+}
+
+function stopPreviewLoop() {
+  previewLoopActive = false;
+
+  previewLoopLabel.textContent = 'Play clip';
+  previewLoopToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', 'play');
+  lucide.createIcons();
+
+  if (previewReady) {
+    previewPlayerHost.pause();
+  }
+}
+
+function updatePreviewSoundUI() {
+  previewSoundLabel.textContent = previewMuted ? 'Muted' : 'Sound on';
+  previewSoundToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', previewMuted ? 'volume-x' : 'volume-2');
+  lucide.createIcons();
+
+  if (previewReady) {
+    previewPlayerHost.muted = previewMuted;
+  }
+}
+
+function startPreviewLoop() {
+  if (!previewReady) return;
+
+  const start = Number(beginTimeRange.value || 0);
+  const end = Number(endTimeRange.value || start + 1);
+
+  stopPreviewLoop();
+  previewLoopActive = true;
+  previewLoopLabel.textContent = 'Stop preview';
+  previewLoopToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', 'pause');
+  lucide.createIcons();
+
+  previewPlaceholder.classList.add('hidden');
+  previewPlayerHost.currentTime = start;
+  previewPlayerHost.muted = previewMuted;
+  previewPlayerHost.play().catch(() => {
+    stopPreviewLoop();
+  });
+}
+
+function refreshPreviewFrame(second) {
+  stopPreviewLoop();
+
+  if (previewReady) {
+    previewPlayerHost.classList.remove('hidden');
+    previewPlayerHost.currentTime = second;
+    previewPlayerHost.pause();
+  }
+}
+
+function setPreviewDuration(duration) {
+  previewDurationLimit = Math.max(0, Math.floor(duration || 0));
+  const maxValue = previewDurationLimit;
+  const previousMax = Math.max(0, Number(beginTimeRange.max) || 0);
+  const currentStart = previousMax > 0 ? Math.min(Number(beginTimeRange.value || 0), maxValue) : 0;
+  const currentEnd = previousMax > 0
+    ? Math.min(Math.max(Number(endTimeRange.value || maxValue), currentStart + 1), maxValue)
+    : maxValue;
+
+  beginTimeRange.max = String(maxValue);
+  endTimeRange.max = String(maxValue);
+  beginTimeRange.value = String(currentStart);
+  endTimeRange.value = String(currentEnd);
+  updateRangeVisuals();
+}
+
+function resetPreview() {
+  hide(previewPanel);
+  previewPlayerHost.classList.add('hidden');
+  previewPlayerHost.pause();
+  previewPlayerHost.removeAttribute('src');
+  previewPlayerHost.load();
+  previewReady = false;
+  previewDurationLimit = 0;
+  previewMuted = true;
+  currentPreviewSourceUrl = '';
+  stopPreviewLoop();
+  beginTimeRange.max = '0';
+  endTimeRange.max = '0';
+  beginTimeRange.value = '0';
+  endTimeRange.value = '1';
+  updateRangeVisuals();
+  previewPlaceholder.innerHTML = `
+    <div class="flex items-center gap-2 rounded-full bg-black/40 px-4 py-2 text-sm font-medium backdrop-blur-sm">
+      <i data-lucide="play-circle" class="h-4 w-4"></i>
+      Preview loading
+    </div>
+  `;
+  lucide.createIcons();
+  updatePreviewSoundUI();
+}
+
+function handleStartRangeInput() {
+  const max = Math.max(0, Number(beginTimeRange.max) || 0);
+  const start = Math.min(Math.max(0, Number(beginTimeRange.value) || 0), max);
+  let end = Math.min(Math.max(0, Number(endTimeRange.value) || 0), max);
+
+  if (start >= end) {
+    end = Math.min(max, start + 1);
+    endTimeRange.value = String(end);
+  }
+
+  beginTimeRange.value = String(start);
+  updateRangeVisuals();
+  refreshPreviewFrame(start);
+}
+
+function handleEndRangeInput() {
+  const max = Math.max(0, Number(endTimeRange.max) || 0);
+  let end = Math.min(Math.max(0, Number(endTimeRange.value) || 0), max);
+  let start = Math.min(Math.max(0, Number(beginTimeRange.value) || 0), max);
+
+  if (end <= start) {
+    start = Math.max(0, end - 1);
+    beginTimeRange.value = String(start);
+  }
+
+  endTimeRange.value = String(end);
+  updateRangeVisuals();
+  stopPreviewLoop();
+}
 
 function setConverting(loading) {
   submitBtn.disabled = loading;
@@ -136,7 +334,96 @@ urlInput.addEventListener('input', () => {
   } else {
     urlError.classList.add('hidden');
   }
+  queuePreviewLoad();
 });
+
+beginTimeRange.addEventListener('input', handleStartRangeInput);
+endTimeRange.addEventListener('input', handleEndRangeInput);
+previewLoopToggle.addEventListener('click', () => {
+  if (previewLoopActive) {
+    stopPreviewLoop();
+  } else {
+    startPreviewLoop();
+  }
+});
+previewSoundToggle.addEventListener('click', () => {
+  previewMuted = !previewMuted;
+  updatePreviewSoundUI();
+});
+
+updateRangeVisuals();
+updatePreviewSoundUI();
+
+previewPlayerHost.addEventListener('loadedmetadata', () => {
+  previewReady = true;
+  previewPlayerHost.classList.remove('hidden');
+  previewPlaceholder.classList.add('hidden');
+  setPreviewDuration(previewPlayerHost.duration);
+  updatePreviewSoundUI();
+  refreshPreviewFrame(Number(beginTimeRange.value || 0));
+});
+
+previewPlayerHost.addEventListener('timeupdate', () => {
+  if (previewLoopActive) {
+    const start = Number(beginTimeRange.value || 0);
+    const end = Number(endTimeRange.value || start + 1);
+    if (previewPlayerHost.currentTime >= end) {
+      previewPlayerHost.currentTime = start;
+      previewPlayerHost.play().catch(() => {
+        stopPreviewLoop();
+      });
+    }
+  }
+});
+
+async function loadPreview(url) {
+  if (previewAbortController) {
+    previewAbortController.abort();
+  }
+
+  previewAbortController = new AbortController();
+  previewReady = false;
+  show(previewPanel);
+  previewPlayerHost.classList.add('hidden');
+  previewPlaceholder.classList.remove('hidden');
+  previewPlaceholder.querySelector('div').lastChild.textContent = 'Preparing preview';
+
+  try {
+    const res = await fetch('/api/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal: previewAbortController.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to prepare preview');
+    if (urlInput.value.trim() !== url) return;
+
+    currentPreviewSourceUrl = url;
+    previewPlayerHost.src = `${data.previewUrl}?t=${Date.now()}`;
+    previewPlayerHost.load();
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    previewPlaceholder.querySelector('div').lastChild.textContent = 'Preview unavailable';
+  }
+}
+
+function queuePreviewLoad() {
+  const value = urlInput.value.trim();
+  if (!value || !validateUrl(value)) {
+    if (previewRequestTimer) clearTimeout(previewRequestTimer);
+    if (previewAbortController) previewAbortController.abort();
+    resetPreview();
+    return;
+  }
+
+  if (previewRequestTimer) clearTimeout(previewRequestTimer);
+  previewRequestTimer = window.setTimeout(() => {
+    if (value !== currentPreviewSourceUrl) {
+      loadPreview(value);
+    }
+  }, 500);
+}
 
 // ── Form submit ────────────────────────────────────────────
 form.addEventListener('submit', async (e) => {
@@ -161,7 +448,6 @@ form.addEventListener('submit', async (e) => {
     beginTime: document.getElementById('beginTime').value !== '' ? document.getElementById('beginTime').value : null,
     duration:  document.getElementById('duration').value  || null,
     verbose:   document.getElementById('verbose').checked,
-    thumb:     document.getElementById('thumb').checked,
   };
 
   let jobId;

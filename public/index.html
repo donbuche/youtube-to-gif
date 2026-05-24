@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>YouTube to GIF Converter</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
   <!-- CDN must load first so tailwind global exists before we configure it -->
   <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
   <script>
@@ -57,6 +58,70 @@
       to   { opacity: 1; transform: translateY(0); }
     }
     .fade-in { animation: fade-in 0.35s ease both; }
+
+    input[type="range"] {
+      accent-color: #4f46e5;
+    }
+
+    #video-player {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .range-stack {
+      position: relative;
+      width: 100%;
+      height: 2rem;
+    }
+
+    .range-stack input[type="range"] {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      margin: 0;
+      background: transparent;
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    .range-stack input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      pointer-events: auto;
+      width: 1.125rem;
+      height: 1.125rem;
+      border-radius: 9999px;
+      background: #4f46e5;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
+      cursor: pointer;
+      margin-top: -0.1875rem;
+    }
+
+    .range-stack input[type="range"]::-moz-range-thumb {
+      pointer-events: auto;
+      width: 1.125rem;
+      height: 1.125rem;
+      border-radius: 9999px;
+      background: #4f46e5;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
+      cursor: pointer;
+    }
+
+    .range-stack input[type="range"]::-webkit-slider-runnable-track {
+      height: 0.75rem;
+      background: transparent;
+      border-radius: 9999px;
+    }
+
+    .range-stack input[type="range"]::-moz-range-track {
+      height: 0.75rem;
+      background: transparent;
+      border-radius: 9999px;
+    }
   </style>
 </head>
 <body class="bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans min-h-screen transition-colors duration-300">
@@ -108,7 +173,7 @@
         <!-- Card header -->
         <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3">
           <div class="w-8 h-8 rounded-lg bg-brand-100 dark:bg-brand-900/40 flex items-center justify-center">
-            <i data-lucide="youtube" class="w-4 h-4 text-brand-600 dark:text-brand-400"></i>
+            <i data-lucide="video" class="w-4 h-4 text-brand-600 dark:text-brand-400"></i>
           </div>
           <div>
             <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Video Source</h3>
@@ -117,6 +182,94 @@
         </div>
 
         <form id="convert-form" class="p-6 space-y-8" novalidate>
+
+          <!-- Video preview -->
+          <div id="video-preview-panel" class="hidden space-y-4">
+            <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800">
+              <div class="relative aspect-video">
+                <video
+                  id="video-player"
+                  class="absolute inset-0 hidden"
+                  playsinline
+                  preload="metadata"
+                  muted
+                ></video>
+                <div id="video-preview-placeholder" class="absolute inset-0 flex items-center justify-center bg-slate-950/40 text-white">
+                  <div class="flex items-center gap-2 rounded-full bg-black/40 px-4 py-2 text-sm font-medium backdrop-blur-sm">
+                    <i data-lucide="play-circle" class="h-4 w-4"></i>
+                    Preview loading
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-3">
+                <label for="beginTimeRange" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  Clip range
+                </label>
+                <div class="flex items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400">
+                  <span id="beginTimeValue">3s</span>
+                  <span>/</span>
+                  <span id="beginTimeMax">0s</span>
+                </div>
+              </div>
+              <div class="space-y-3">
+                <div class="relative h-8 flex items-center">
+                  <div class="absolute inset-x-0 h-3 rounded-full bg-slate-200 dark:bg-slate-700"></div>
+                  <div id="rangeSelection" class="absolute h-3 rounded-full bg-brand-500"></div>
+                  <div class="range-stack">
+                    <input
+                      type="range"
+                      id="beginTimeRange"
+                      min="0"
+                      max="0"
+                      step="1"
+                      value="3"
+                      class="cursor-pointer"
+                    />
+                    <input
+                      type="range"
+                      id="endTimeRange"
+                      min="0"
+                      max="0"
+                      step="1"
+                      value="18"
+                      class="cursor-pointer"
+                    />
+                  </div>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+                  <span id="rangeStartLabel" class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-slate-600 dark:bg-slate-800 dark:text-slate-300">Start 3s</span>
+                  <span id="rangeDurationLabel" class="inline-flex items-center rounded-full bg-brand-50 px-2.5 py-1 text-brand-700 dark:bg-brand-900/30 dark:text-brand-300">Duration 15s</span>
+                  <span id="rangeEndLabel" class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-slate-600 dark:bg-slate-800 dark:text-slate-300">End 18s</span>
+                </div>
+              </div>
+              <input type="hidden" id="beginTime" name="beginTime" value="3" />
+              <input type="hidden" id="duration" name="duration" value="15" />
+              <p class="text-xs text-slate-400">Move the left handle to choose the start frame and the right handle to set where the GIF ends. Use the button to preview the selected segment in a loop.</p>
+              <div class="pt-5 flex justify-center">
+                <div class="flex items-center gap-3">
+                  <button
+                    type="button"
+                    id="preview-loop-toggle"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                  >
+                    <i data-lucide="play" class="h-3.5 w-3.5"></i>
+                    <span id="preview-loop-label">Play clip</span>
+                  </button>
+                  <button
+                    type="button"
+                    id="preview-sound-toggle"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                  >
+                    <i data-lucide="volume-x" class="h-3.5 w-3.5"></i>
+                    <span id="preview-sound-label">Muted</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <!-- URL Input -->
           <div>
@@ -129,7 +282,7 @@
               </div>
               <input type="url" id="url" name="url" required
                 placeholder="https://www.youtube.com/watch?v=..."
-                class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition" />
+                class="w-full min-h-16 pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 text-[1.25rem] focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition" />
             </div>
             <p id="url-error" class="mt-1.5 text-xs text-red-500 hidden">Please enter a valid YouTube URL.</p>
           </div>
@@ -145,7 +298,7 @@
           </div>
 
           <!-- Options grid -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
             <!-- FPS -->
             <div>
@@ -156,10 +309,10 @@
                 <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
                   <i data-lucide="gauge" class="w-4 h-4 text-slate-400"></i>
                 </div>
-                <input type="number" id="fps" name="fps" min="1" max="60" value="30" placeholder="10"
+                <input type="number" id="fps" name="fps" min="1" max="60" value="20" placeholder="10"
                   class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition" />
               </div>
-              <p class="mt-1.5 text-xs text-slate-400">Default: 10 fps</p>
+              <p class="mt-1.5 text-xs text-slate-400">Default: 20 fps</p>
             </div>
 
             <!-- Size -->
@@ -174,41 +327,11 @@
                 <input type="text" id="size" name="size" value="640x360" placeholder="400x300"
                   class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition" />
               </div>
-              <p class="mt-1.5 text-xs text-slate-400">e.g. 640x480. Default: 400x300</p>
-            </div>
-
-            <!-- Begin time -->
-            <div>
-              <label for="beginTime" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
-                Start offset (seconds)
-              </label>
-              <div class="relative">
-                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <i data-lucide="skip-forward" class="w-4 h-4 text-slate-400"></i>
-                </div>
-                <input type="number" id="beginTime" name="beginTime" min="0" placeholder="3"
-                  class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition" />
-              </div>
-              <p class="mt-1.5 text-xs text-slate-400">Skip intro. Default: 3s</p>
-            </div>
-
-            <!-- Duration -->
-            <div>
-              <label for="duration" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
-                Duration (seconds)
-              </label>
-              <div class="relative">
-                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <i data-lucide="timer" class="w-4 h-4 text-slate-400"></i>
-                </div>
-                <input type="number" id="duration" name="duration" min="1" max="300" value="15" placeholder="15"
-                  class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition" />
-              </div>
-              <p class="mt-1.5 text-xs text-slate-400">GIF length. Default: 15s</p>
+              <p class="mt-1.5 text-xs text-slate-400">Default: 640x360. Use 16:9 sizes for best results.</p>
             </div>
 
             <!-- Output filename -->
-            <div class="sm:col-span-2">
+            <div>
               <label for="output" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
                 Output filename
               </label>
@@ -222,62 +345,31 @@
                   <span class="text-xs font-mono text-slate-400">.gif</span>
                 </div>
               </div>
-              <p class="mt-1.5 text-xs text-slate-400">
-                Leave empty to auto-generate. Saved in <code class="font-mono">./output/</code>
-                <a href="/output" target="_blank" rel="noopener" class="ml-2 text-brand-500 hover:text-brand-600 hover:underline">
-                  Open folder
-                </a>
-              </p>
+              <div class="mt-1.5 text-xs text-slate-400">
+                <span>Leave empty to auto-generate a filename.</span>
+              </div>
             </div>
           </div>
 
-          <!-- Divider -->
-          <div class="flex items-center gap-3">
-            <div class="flex-1 h-px bg-slate-200 dark:bg-slate-700"></div>
-            <div class="flex items-center gap-1.5 text-xs font-medium text-slate-400">
-              <i data-lucide="settings-2" class="w-3.5 h-3.5"></i>
-              Advanced
-            </div>
-            <div class="flex-1 h-px bg-slate-200 dark:bg-slate-700"></div>
-          </div>
-
-          <!-- Toggles -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
-
-            <!-- Verbose toggle -->
-            <label class="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 cursor-pointer hover:border-brand-300 dark:hover:border-brand-700 transition group">
-              <div class="flex items-center gap-3">
-                <div class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 group-hover:bg-brand-100 dark:group-hover:bg-brand-900/30 flex items-center justify-center transition">
-                  <i data-lucide="terminal" class="w-3.5 h-3.5 text-slate-500 group-hover:text-brand-500 transition"></i>
-                </div>
-                <div>
-                  <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Verbose output</p>
-                  <p class="text-xs text-slate-400">Show all process logs</p>
-                </div>
-              </div>
-              <div class="relative flex-shrink-0">
-                <input type="checkbox" id="verbose" name="verbose" class="sr-only peer" />
-                <div class="w-10 h-[22px] rounded-full bg-slate-300 dark:bg-slate-600 peer-checked:bg-brand-500 transition-colors duration-200"></div>
-                <div class="absolute top-0.5 left-0.5 w-[18px] h-[18px] rounded-full bg-white shadow transition-transform duration-200 peer-checked:translate-x-[18px]"></div>
-              </div>
-            </label>
-
-            <!-- Thumbnail toggle -->
-            <label class="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 cursor-pointer hover:border-brand-300 dark:hover:border-brand-700 transition group">
-              <div class="flex items-center gap-3">
-                <div class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 group-hover:bg-brand-100 dark:group-hover:bg-brand-900/30 flex items-center justify-center transition">
-                  <i data-lucide="image" class="w-3.5 h-3.5 text-slate-500 group-hover:text-brand-500 transition"></i>
-                </div>
-                <div>
-                  <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Show thumbnail</p>
-                  <p class="text-xs text-slate-400">Display preview in console</p>
-                </div>
-              </div>
-              <div class="relative flex-shrink-0">
-                <input type="checkbox" id="thumb" name="thumb" class="sr-only peer" />
-                <div class="w-10 h-[22px] rounded-full bg-slate-300 dark:bg-slate-600 peer-checked:bg-brand-500 transition-colors duration-200"></div>
-                <div class="absolute top-0.5 left-0.5 w-[18px] h-[18px] rounded-full bg-white shadow transition-transform duration-200 peer-checked:translate-x-[18px]"></div>
-              </div>
+          <div class="flex flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
+            <a
+              href="/output"
+              target="_blank"
+              rel="noopener"
+              class="inline-flex items-center gap-1.5 text-xs text-brand-500 hover:text-brand-600 hover:underline"
+            >
+              <i data-lucide="folder-open" class="h-3.5 w-3.5"></i>
+              <span>Open the output folder to view your GIFs</span>
+            </a>
+            <label for="verbose" class="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <input
+                type="checkbox"
+                id="verbose"
+                name="verbose"
+                checked
+                class="h-4 w-4 rounded border-slate-300 bg-slate-50 text-brand-600 focus:ring-brand-500 dark:border-slate-600 dark:bg-slate-800"
+              />
+              <span>Detailed logs</span>
             </label>
           </div>
 
@@ -427,11 +519,28 @@
               </div>
               <div>
                 <p class="text-sm font-medium text-slate-800 dark:text-slate-200">Best results</p>
-                <p class="text-xs text-slate-400 mt-0.5">Keep duration under 15s and size under 480px for optimal GIF file size.</p>
+                <p class="text-xs text-slate-400 mt-0.5">Start with the default 20 fps and 640x360 preset, then keep the selected clip short for a lighter GIF.</p>
               </div>
             </div>
           </div>
         </div>
+      </div>
+
+      <div class="px-4 pb-2 text-center">
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+          Developed with ❤️ in Arenys de Munt, by Joan Galtes i Moreno
+        </p>
+        <a
+          href="https://github.com/donbuche/youtube-to-gif"
+          target="_blank"
+          rel="noopener"
+          class="mt-2 inline-flex items-center gap-2 text-sm text-slate-500 hover:text-brand-600 dark:text-slate-400 dark:hover:text-brand-400"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-current">
+            <path d="M12 .5C5.649.5.5 5.649.5 12c0 5.084 3.292 9.398 7.861 10.92.575.106.786-.25.786-.556 0-.274-.01-1-.016-1.961-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.278-1.682-1.278-1.682-1.045-.714.08-.699.08-.699 1.155.081 1.763 1.186 1.763 1.186 1.027 1.759 2.694 1.251 3.35.957.104-.744.402-1.251.731-1.539-2.553-.29-5.238-1.277-5.238-5.684 0-1.255.448-2.282 1.183-3.087-.119-.29-.513-1.458.112-3.04 0 0 .965-.309 3.162 1.18a10.96 10.96 0 0 1 2.879-.387c.976.004 1.96.132 2.879.387 2.195-1.489 3.159-1.18 3.159-1.18.627 1.582.233 2.75.114 3.04.737.805 1.181 1.832 1.181 3.087 0 4.418-2.689 5.391-5.25 5.676.413.355.781 1.055.781 2.126 0 1.536-.014 2.774-.014 3.151 0 .309.207.668.792.555C20.211 21.395 23.5 17.082 23.5 12 23.5 5.649 18.351.5 12 .5Z"/>
+          </svg>
+          <span>View project on GitHub</span>
+        </a>
       </div>
 
     </div>

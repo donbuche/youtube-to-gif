@@ -13,6 +13,7 @@ const YT_DLP_BINARY = process.env.YT_DLP_BINARY || 'yt-dlp';
 const FFMPEG_BINARY = process.env.FFMPEG_BINARY || 'ffmpeg';
 const YT_DLP_COOKIES_FROM_BROWSER = process.env.YT_DLP_COOKIES_FROM_BROWSER;
 const YT_DLP_COOKIES_FROM_BROWSER_PROFILE = process.env.YT_DLP_COOKIES_FROM_BROWSER_PROFILE;
+const PREVIEW_TTL_MS = 30 * 60 * 1000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -22,6 +23,7 @@ if (!fs.existsSync(OUTPUT_DIR)) {
 }
 
 const jobs = new Map();
+const previews = new Map();
 
 function escapeHtml(value) {
   return value
@@ -180,6 +182,52 @@ function runYtDlp(url, verbose, broadcast, strategy, jobId) {
   });
 }
 
+async function downloadSourceVideo(url, verbose, broadcast, jobId) {
+  const authStrategies = resolveAuthStrategies();
+  let lastFailure = null;
+
+  for (const strategy of authStrategies) {
+    try {
+      const result = await runYtDlp(url, verbose, broadcast, strategy, jobId);
+      if (result.ok) {
+        return result;
+      }
+
+      lastFailure = result;
+      if (verbose && authStrategies.length > 1) {
+        broadcast({ type: 'log', message: `yt-dlp failed using ${strategy.label}. Trying next authentication strategy.\n` });
+      }
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  const message = lastFailure
+    ? formatYtDlpError(lastFailure.code, lastFailure.stderr, lastFailure.strategy)
+    : 'yt-dlp could not download the source video';
+
+  return {
+    ok: false,
+    message,
+  };
+}
+
+function schedulePreviewCleanup(previewId, tempDir) {
+  const existing = previews.get(previewId);
+  if (existing?.timeoutId) {
+    clearTimeout(existing.timeoutId);
+  }
+
+  const timeoutId = setTimeout(async () => {
+    previews.delete(previewId);
+    await removePath(tempDir);
+  }, PREVIEW_TTL_MS);
+
+  if (existing) {
+    existing.timeoutId = timeoutId;
+  }
+}
+
 app.get(['/output', '/output/'], async (_req, res) => {
   try {
     const entries = await fs.promises.readdir(OUTPUT_DIR, { withFileTypes: true });
@@ -231,6 +279,48 @@ app.get(['/output', '/output/'], async (_req, res) => {
 });
 
 app.use('/output', express.static(OUTPUT_DIR));
+
+app.post('/api/preview', async (req, res) => {
+  const { url } = req.body || {};
+
+  if (!url || !url.trim()) {
+    return res.status(400).json({ error: 'YouTube URL is required' });
+  }
+
+  const previewId = crypto.randomUUID();
+  const noop = () => {};
+
+  try {
+    const result = await downloadSourceVideo(url.trim(), false, noop, `preview-${previewId}`);
+    if (!result.ok) {
+      return res.status(400).json({ error: result.message });
+    }
+
+    previews.set(previewId, {
+      filePath: result.inputPath,
+      tempDir: result.tempDir,
+      timeoutId: null,
+    });
+    schedulePreviewCleanup(previewId, result.tempDir);
+
+    return res.json({
+      previewId,
+      previewUrl: `/api/preview/${previewId}`,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to prepare preview: ${err.message}` });
+  }
+});
+
+app.get('/api/preview/:previewId', (req, res) => {
+  const preview = previews.get(req.params.previewId);
+  if (!preview) {
+    return res.status(404).json({ error: 'Preview not found' });
+  }
+
+  schedulePreviewCleanup(req.params.previewId, preview.tempDir);
+  res.sendFile(preview.filePath);
+});
 
 app.post('/api/convert', (req, res) => {
   const { url, output, fps, size, beginTime, duration, verbose } = req.body;
@@ -307,34 +397,21 @@ app.post('/api/convert', (req, res) => {
 
   res.json({ jobId });
 
-  const authStrategies = resolveAuthStrategies();
-
   (async () => {
-    let lastFailure = null;
     let inputPath = null;
     let tempDir = null;
 
-    for (const strategy of authStrategies) {
-      try {
-        const result = await runYtDlp(url, verbose, broadcast, strategy, jobId);
-        if (result.ok) {
-          inputPath = result.inputPath;
-          tempDir = result.tempDir;
-          break;
-        }
-
-        lastFailure = result;
-        if (verbose && authStrategies.length > 1) {
-          broadcast({ type: 'log', message: `yt-dlp failed using ${strategy.label}. Trying next authentication strategy.\n` });
-        }
-      } catch (err) {
-        failToStart(err);
+    try {
+      const result = await downloadSourceVideo(url, verbose, broadcast, jobId);
+      if (!result.ok) {
+        finishJob(false, result.message);
         return;
       }
-    }
 
-    if (!inputPath) {
-      finishJob(false, formatYtDlpError(lastFailure.code, lastFailure.stderr, lastFailure.strategy));
+      inputPath = result.inputPath;
+      tempDir = result.tempDir;
+    } catch (err) {
+      failToStart(err);
       return;
     }
 
