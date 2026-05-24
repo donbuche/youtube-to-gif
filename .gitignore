@@ -1,5 +1,4 @@
 node_modules/
 output/
 
-.ddev/yt-dlp-cookies.txt
-.ddev/traefik/certs/
+yt-dlp-cookies.txt
