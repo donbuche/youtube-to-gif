@@ -1,5 +1,6 @@
 const express = require('express');
 const { spawn } = require('child_process');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -7,9 +8,11 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const OUTPUT_DIR = path.join(__dirname, 'output');
-const DEFAULT_COOKIES_FILE = path.join(__dirname, '.ddev', 'yt-dlp-cookies.txt');
+const DEFAULT_COOKIES_FILE = path.join(__dirname, 'yt-dlp-cookies.txt');
 const YT_DLP_BINARY = process.env.YT_DLP_BINARY || 'yt-dlp';
 const FFMPEG_BINARY = process.env.FFMPEG_BINARY || 'ffmpeg';
+const YT_DLP_COOKIES_FROM_BROWSER = process.env.YT_DLP_COOKIES_FROM_BROWSER;
+const YT_DLP_COOKIES_FROM_BROWSER_PROFILE = process.env.YT_DLP_COOKIES_FROM_BROWSER_PROFILE;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -41,16 +44,140 @@ function resolveCookiesFile() {
   return null;
 }
 
-function formatYtDlpError(code, stderr, cookiesFile) {
+function resolveAuthStrategies() {
+  const strategies = [];
+
+  if (YT_DLP_COOKIES_FROM_BROWSER) {
+    strategies.push({
+      kind: 'browser',
+      label: `browser cookies (${YT_DLP_COOKIES_FROM_BROWSER})`,
+      args: YT_DLP_COOKIES_FROM_BROWSER_PROFILE
+        ? ['--cookies-from-browser', `${YT_DLP_COOKIES_FROM_BROWSER}:${YT_DLP_COOKIES_FROM_BROWSER_PROFILE}`]
+        : ['--cookies-from-browser', YT_DLP_COOKIES_FROM_BROWSER],
+    });
+  }
+
+  const cookiesFile = resolveCookiesFile();
+  if (cookiesFile) {
+    strategies.push({
+      kind: 'file',
+      label: `cookies file (${cookiesFile})`,
+      cookiesFile,
+      args: ['--cookies', cookiesFile],
+    });
+  }
+
+  if (strategies.length === 0) {
+    strategies.push({
+      kind: 'none',
+      label: 'no authentication',
+      args: [],
+    });
+  }
+
+  return strategies;
+}
+
+function formatYtDlpError(code, stderr, strategy) {
   const details = stderr ? `: ${stderr.trim()}` : '';
   if (/Sign in to confirm you.?re not a bot/i.test(stderr)) {
-    const cookieHint = cookiesFile
-      ? ` Current cookies file: ${cookiesFile}.`
-      : ` Add a Netscape-format cookies file at ${DEFAULT_COOKIES_FILE} or set YT_DLP_COOKIES_FILE to its path.`;
-    return `yt-dlp failed with code ${code}. YouTube is requiring authenticated cookies for this video.${cookieHint}${details}`;
+    if (strategy?.kind === 'browser') {
+      return `yt-dlp failed with code ${code}. YouTube still rejected the configured browser cookies (${YT_DLP_COOKIES_FROM_BROWSER}). Refresh your browser session and retry.${details}`;
+    }
+
+    if (strategy?.kind === 'file') {
+      return `yt-dlp failed with code ${code}. YouTube rejected the configured cookies file (${strategy.cookiesFile}). For bot-protected videos, browser cookies are often more reliable. In local mode, start the server with YT_DLP_COOKIES_FROM_BROWSER=chrome.${details}`;
+    }
+
+    return `yt-dlp failed with code ${code}. YouTube is requiring authenticated cookies for this video. Add a Netscape-format cookies file at ${DEFAULT_COOKIES_FILE}, set YT_DLP_COOKIES_FILE to its path, or run locally with YT_DLP_COOKIES_FROM_BROWSER=chrome.${details}`;
   }
 
   return `yt-dlp failed with code ${code}${details}`;
+}
+
+async function removePath(targetPath) {
+  if (!targetPath) return;
+  await fs.promises.rm(targetPath, { recursive: true, force: true });
+}
+
+function runYtDlp(url, verbose, broadcast, strategy, jobId) {
+  return new Promise((resolve, reject) => {
+    const tempDir = path.join(os.tmpdir(), `youtube-to-gif-${jobId}`);
+    const outputTemplate = path.join(tempDir, 'source.%(ext)s');
+    const ytDlpArgs = [
+      '--no-part',
+      '--no-playlist',
+      '--print', 'after_move:filepath',
+      '--format', 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b',
+      '--merge-output-format', 'mp4',
+      '--output', outputTemplate,
+      ...strategy.args,
+      url.trim(),
+    ];
+
+    fs.promises.mkdir(tempDir, { recursive: true }).then(() => {
+      if (verbose) {
+        broadcast({ type: 'log', message: `$ ${YT_DLP_BINARY} ${ytDlpArgs.join(' ')}\n` });
+        broadcast({ type: 'log', message: `Authentication mode: ${strategy.label}\n` });
+      }
+
+      const ytDlpProc = spawn(YT_DLP_BINARY, ytDlpArgs);
+      let ytDlpStdout = '';
+      let ytDlpStderr = '';
+
+      ytDlpProc.stdout.on('data', (chunk) => {
+        const text = chunk.toString();
+        ytDlpStdout += text;
+        if (verbose) broadcast({ type: 'log', message: text });
+      });
+
+      ytDlpProc.stderr.on('data', (chunk) => {
+        const text = chunk.toString();
+        ytDlpStderr += text;
+        if (verbose) broadcast({ type: 'log', message: text });
+      });
+
+      ytDlpProc.on('error', reject);
+
+      ytDlpProc.on('close', async (code) => {
+        if (code !== 0) {
+          await removePath(tempDir);
+          resolve({
+            ok: false,
+            code,
+            stderr: ytDlpStderr,
+            strategy,
+          });
+          return;
+        }
+
+        const downloadedFile = ytDlpStdout
+          .trim()
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .at(-1);
+
+        if (!downloadedFile || !fs.existsSync(downloadedFile)) {
+          await removePath(tempDir);
+          resolve({
+            ok: false,
+            code: 1,
+            stderr: 'yt-dlp did not produce a local video file',
+            strategy,
+          });
+          return;
+        }
+
+        resolve({
+          ok: true,
+          inputPath: downloadedFile,
+          tempDir,
+          strategy,
+        });
+      });
+    }).catch(reject);
+  });
 }
 
 app.get(['/output', '/output/'], async (_req, res) => {
@@ -180,47 +307,34 @@ app.post('/api/convert', (req, res) => {
 
   res.json({ jobId });
 
-  const ytDlpArgs = [
-    '--get-url',
-    '--format', 'best[ext=mp4]/best',
-  ];
-  const cookiesFile = resolveCookiesFile();
+  const authStrategies = resolveAuthStrategies();
 
-  if (cookiesFile) {
-    ytDlpArgs.push('--cookies', cookiesFile);
-  }
+  (async () => {
+    let lastFailure = null;
+    let inputPath = null;
+    let tempDir = null;
 
-  ytDlpArgs.push(url.trim());
+    for (const strategy of authStrategies) {
+      try {
+        const result = await runYtDlp(url, verbose, broadcast, strategy, jobId);
+        if (result.ok) {
+          inputPath = result.inputPath;
+          tempDir = result.tempDir;
+          break;
+        }
 
-  if (verbose) {
-    broadcast({ type: 'log', message: `$ ${YT_DLP_BINARY} ${ytDlpArgs.join(' ')}\n` });
-  }
-
-  const ytDlpProc = spawn(YT_DLP_BINARY, ytDlpArgs);
-  let mediaUrl = '';
-  let ytDlpStderr = '';
-
-  ytDlpProc.stdout.on('data', (chunk) => {
-    mediaUrl += chunk.toString();
-  });
-
-  ytDlpProc.stderr.on('data', (chunk) => {
-    const text = chunk.toString();
-    ytDlpStderr += text;
-    if (verbose) broadcast({ type: 'log', message: text });
-  });
-
-  ytDlpProc.on('error', failToStart);
-
-  ytDlpProc.on('close', (code) => {
-    if (code !== 0) {
-      finishJob(false, formatYtDlpError(code, ytDlpStderr, cookiesFile));
-      return;
+        lastFailure = result;
+        if (verbose && authStrategies.length > 1) {
+          broadcast({ type: 'log', message: `yt-dlp failed using ${strategy.label}. Trying next authentication strategy.\n` });
+        }
+      } catch (err) {
+        failToStart(err);
+        return;
+      }
     }
 
-    const inputUrl = mediaUrl.trim().split('\n').find(Boolean);
-    if (!inputUrl) {
-      finishJob(false, 'yt-dlp did not return a downloadable media URL');
+    if (!inputPath) {
+      finishJob(false, formatYtDlpError(lastFailure.code, lastFailure.stderr, lastFailure.strategy));
       return;
     }
 
@@ -228,7 +342,7 @@ app.post('/api/convert', (req, res) => {
       '-y',
       '-ss', String(resolvedBeginTime),
       '-t', String(resolvedDuration),
-      '-i', inputUrl,
+      '-i', inputPath,
       '-vf', `fps=${resolvedFps},scale=${parsedSize.width}:${parsedSize.height}:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
       absoluteOutputPath,
     ];
@@ -250,13 +364,14 @@ app.post('/api/convert', (req, res) => {
     ffmpegProc.on('error', failToStart);
 
     ffmpegProc.on('close', (ffmpegCode) => {
+      removePath(tempDir).catch(() => {});
       if (ffmpegCode === 0 && fs.existsSync(absoluteOutputPath)) {
         finishJob(true);
       } else {
         finishJob(false, `ffmpeg failed with code ${ffmpegCode}`);
       }
     });
-  });
+  })();
 });
 
 app.get('/api/stream/:jobId', (req, res) => {

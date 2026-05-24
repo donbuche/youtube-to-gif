@@ -4,7 +4,6 @@
 <img src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&amp;logoColor=white" alt="Node.js" />
 <img src="https://img.shields.io/badge/Express-4.18-000000?logo=express&amp;logoColor=white" alt="Express" />
 <img src="https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?logo=tailwindcss&amp;logoColor=white" alt="Tailwind CSS" />
-<img src="https://img.shields.io/badge/DDEV-1.25-02B4E0?logo=ddev&amp;logoColor=white" alt="DDEV" />
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" />
 
 A web application to convert YouTube videos into animated GIFs — right from your browser. Paste a URL, configure the output options and download your GIF in seconds.
@@ -20,7 +19,7 @@ A web application to convert YouTube videos into animated GIFs — right from yo
 - **Live log terminal** — real-time conversion output streamed via Server-Sent Events (SSE)
 - **GIF preview** — inline preview and one-click download when done
 - **Modern UI** — Tailwind CSS interface with dark/light mode toggle and smooth animations
-- **Local HTTPS** — served at `https://youtube-to-gif.dev` via DDEV + mkcert (no port numbers)
+- **Local-first** — runs directly with Node.js on your machine
 
 ---
 
@@ -33,7 +32,7 @@ A web application to convert YouTube videos into animated GIFs — right from yo
 | Icons | Lucide |
 | Fonts | Inter + JetBrains Mono |
 | Streaming | Server-Sent Events (SSE) |
-| Local env | DDEV (Docker + Traefik + mkcert) |
+| Runtime | Node.js |
 | Conversion | yt-dlp + ffmpeg |
 
 ---
@@ -42,47 +41,20 @@ A web application to convert YouTube videos into animated GIFs — right from yo
 
 ### System dependencies
 
-Make sure the following tools are installed on your machine before running the app **outside** of DDEV:
+Make sure the following tools are installed on your machine:
 
 ```bash
 # macOS (Homebrew)
 brew install ffmpeg yt-dlp
 ```
 
-> When using DDEV, `ffmpeg` and `yt-dlp` are installed automatically inside the container.
-
 ### Local environment
 
 - [Node.js](https://nodejs.org/) 20+
-- [DDEV](https://ddev.com/) 1.22+ *(recommended)*
 
 ---
 
 ## Getting started
-
-### With DDEV (recommended)
-
-DDEV handles Docker, HTTPS certificates (mkcert), DNS and all system dependencies automatically.
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/youtube-to-gif.git
-cd youtube-to-gif
-
-# 2. Start the project (will prompt for sudo to update /etc/hosts)
-ddev start
-```
-
-The app will be available at:
-
-| URL | Description |
-|---|---|
-| `https://youtube-to-gif.dev` | Custom local domain (HTTPS) |
-| `https://youtube-to-gif.ddev.site` | DDEV default domain (HTTPS) |
-
-> On first start, DDEV installs `ffmpeg`, `yt-dlp` and the Node.js dependencies inside the container. This may take a couple of minutes.
-
-### Without DDEV (standalone)
 
 ```bash
 # 1. Clone and install dependencies
@@ -95,6 +67,22 @@ npm start
 ```
 
 The app will be available at `http://localhost:3000`.
+
+### With browser cookies
+
+For YouTube videos that trigger `Sign in to confirm you're not a bot`, run the server on your Mac with browser-cookie access:
+
+```bash
+npm run start:chrome
+```
+
+Optional profile override:
+
+```bash
+YT_DLP_COOKIES_FROM_BROWSER=chrome \
+YT_DLP_COOKIES_FROM_BROWSER_PROFILE="$HOME/Library/Application Support/Google/Chrome" \
+npm start
+```
 
 ---
 
@@ -120,10 +108,6 @@ Generated GIFs are saved to the `./output/` directory and served statically.
 
 ```
 youtube-to-gif/
-├── .ddev/
-│   ├── config.yaml                  # DDEV project config (Node.js daemon, FQDN, packages)
-│   └── nginx_full/
-│       └── nginx-site.conf          # Nginx reverse proxy with SSE support
 ├── assets/
 │   └── screenshot.png               # README screenshot
 ├── public/
@@ -131,6 +115,7 @@ youtube-to-gif/
 │   └── app.js                       # Client-side logic — form handling, SSE, state
 ├── output/                          # Generated GIF files (git-ignored)
 ├── server.js                        # Express server — REST API + SSE streaming
+├── yt-dlp-cookies.txt               # Optional Netscape cookies file (git-ignored)
 └── package.json
 ```
 
@@ -141,17 +126,14 @@ youtube-to-gif/
 ```
 Browser
   │
-  ▼ HTTPS (youtube-to-gif.dev)
-Traefik router          ← DDEV manages SSL cert via mkcert
-  │
-  ▼ HTTP :80
-nginx (web container)   ← reverse proxy, SSE buffering disabled
-  │
   ▼ HTTP :3000
 Node.js / Express       ← REST API + static file serving
   │
   ▼ child_process.spawn
 yt-dlp                  ← resolves the downloadable media URL
+  │
+  ▼
+temporary local video   ← downloaded by yt-dlp with the active auth strategy
   │
   ▼
 ffmpeg                  ← trims, scales and encodes the GIF
@@ -165,28 +147,21 @@ ffmpeg                  ← trims, scales and encodes the GIF
 ## Development
 
 ```bash
-# Start DDEV
-ddev start
+# Start in watch mode
+npm run dev
 
-# Watch Node.js server logs
-ddev exec "supervisorctl tail -f webextradaemons:node-server"
-
-# Restart only the Node.js process (no full DDEV restart needed)
-ddev exec "supervisorctl restart webextradaemons:node-server"
-
-# Open a shell inside the web container
-ddev ssh
+# Start with Chrome cookies
+npm run start:chrome
 ```
 
 ---
 
 ## Notes
 
-- The `.dev` TLD is HSTS-preloaded by browsers, so HTTPS is always enforced. DDEV + mkcert handles this transparently with a locally-trusted certificate.
-- SSE streaming requires `proxy_buffering off` in nginx — this is already configured in `.ddev/nginx_full/nginx-site.conf`.
 - Output GIFs are **not** git-tracked (`output/` is in `.gitignore`). Files are ephemeral and cleaned up after 10 minutes by the server.
-- Some YouTube videos require authenticated cookies for `yt-dlp`. You can place a Netscape-format cookies file at `.ddev/yt-dlp-cookies.txt` or set `YT_DLP_COOKIES_FILE` to another path before starting the Node server.
-- DDEV-generated Traefik certificates and private keys are intentionally not committed.
+- Some YouTube videos require authenticated cookies for `yt-dlp`. You can place a Netscape-format cookies file at `./yt-dlp-cookies.txt` or set `YT_DLP_COOKIES_FILE` to another path before starting the server.
+- For bot-protected videos, browser cookies are often more reliable than an exported `cookies.txt`. In local mode, use `npm run start:chrome`.
+- The app downloads a temporary local source file before invoking `ffmpeg`, which avoids HLS segment `403` errors from protected YouTube manifests.
 
 ---
 
@@ -211,6 +186,5 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 - [ffmpeg](https://ffmpeg.org/) — video processing
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube download engine
-- [DDEV](https://ddev.com/) — local development environment
 - [Tailwind CSS](https://tailwindcss.com/) — utility-first CSS framework
 - [Lucide](https://lucide.dev/) — icon library
