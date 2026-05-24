@@ -25,6 +25,23 @@ const btnText         = document.getElementById('btn-text');
 const btnIcon         = document.getElementById('btn-icon');
 const urlInput        = document.getElementById('url');
 const urlError        = document.getElementById('url-error');
+const previewPanel    = document.getElementById('video-preview-panel');
+const previewPlayerHost = document.getElementById('video-player');
+const previewPlaceholder = document.getElementById('video-preview-placeholder');
+const beginTimeInput  = document.getElementById('beginTime');
+const beginTimeRange  = document.getElementById('beginTimeRange');
+const endTimeRange    = document.getElementById('endTimeRange');
+const beginTimeValue  = document.getElementById('beginTimeValue');
+const beginTimeMax    = document.getElementById('beginTimeMax');
+const rangeSelection  = document.getElementById('rangeSelection');
+const rangeStartLabel = document.getElementById('rangeStartLabel');
+const rangeDurationLabel = document.getElementById('rangeDurationLabel');
+const rangeEndLabel   = document.getElementById('rangeEndLabel');
+const durationInput   = document.getElementById('duration');
+const previewLoopToggle = document.getElementById('preview-loop-toggle');
+const previewLoopLabel  = document.getElementById('preview-loop-label');
+const previewSoundToggle = document.getElementById('preview-sound-toggle');
+const previewSoundLabel  = document.getElementById('preview-sound-label');
 
 const progressCard    = document.getElementById('progress-card');
 const logOutput       = document.getElementById('log-output');
@@ -45,10 +62,288 @@ const retryBtn        = document.getElementById('retry-btn');
 let activeEventSource = null;
 let progressInterval  = null;
 let fakeProgress      = 0;
+let previewPlayer     = null;
+let previewVideoId    = null;
+let previewReady      = false;
+let previewPendingSeek = 3;
+let previewDurationLimit = 0;
+let previewLoopActive = false;
+let previewLoopTimer  = null;
+let previewMuted      = true;
+
+window.onYouTubeIframeAPIReady = () => {
+  if (previewVideoId) {
+    ensurePreviewPlayer(previewVideoId);
+  }
+};
 
 // ── Helpers ────────────────────────────────────────────────
 function show(el)  { el.classList.remove('hidden'); }
 function hide(el)  { el.classList.add('hidden'); }
+
+function formatSeconds(value) {
+  const total = Math.max(0, Math.floor(Number(value) || 0));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes > 0 ? `${minutes}:${String(seconds).padStart(2, '0')}` : `${seconds}s`;
+}
+
+function extractYouTubeVideoId(value) {
+  try {
+    const url = new URL(value);
+    if (url.hostname.includes('youtu.be')) {
+      return url.pathname.slice(1) || null;
+    }
+    if (url.hostname.includes('youtube.com')) {
+      if (url.pathname === '/watch') {
+        return url.searchParams.get('v');
+      }
+      const parts = url.pathname.split('/').filter(Boolean);
+      const embedIndex = parts.findIndex((part) => part === 'embed' || part === 'shorts' || part === 'live');
+      if (embedIndex !== -1 && parts[embedIndex + 1]) {
+        return parts[embedIndex + 1];
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function updateRangeVisuals() {
+  const max = Math.max(0, Number(beginTimeRange.max) || 0);
+  const start = Math.max(0, Number(beginTimeRange.value) || 0);
+  const end = Math.min(max, Math.max(start + 1, Number(endTimeRange.value) || start + 1));
+  const duration = Math.max(1, end - start);
+
+  beginTimeInput.value = String(start);
+  durationInput.value = String(duration);
+  beginTimeValue.textContent = formatSeconds(start);
+  beginTimeMax.textContent = formatSeconds(previewDurationLimit || max);
+  rangeStartLabel.textContent = `Start ${formatSeconds(start)}`;
+  rangeEndLabel.textContent = `End ${formatSeconds(end)}`;
+  rangeDurationLabel.textContent = `Duration ${formatSeconds(duration)}`;
+
+  const denominator = max || 1;
+  const startPercent = (start / denominator) * 100;
+  const endPercent = (end / denominator) * 100;
+  rangeSelection.style.left = `${startPercent}%`;
+  rangeSelection.style.width = `${Math.max(endPercent - startPercent, 0)}%`;
+}
+
+function stopPreviewLoop() {
+  previewLoopActive = false;
+  if (previewLoopTimer) {
+    window.clearInterval(previewLoopTimer);
+    previewLoopTimer = null;
+  }
+
+  previewLoopLabel.textContent = 'Play clip';
+  previewLoopToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', 'play');
+  lucide.createIcons();
+
+  if (previewPlayer && previewReady) {
+    previewPlayer.pauseVideo();
+  }
+}
+
+function updatePreviewSoundUI() {
+  previewSoundLabel.textContent = previewMuted ? 'Muted' : 'Sound on';
+  previewSoundToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', previewMuted ? 'volume-x' : 'volume-2');
+  lucide.createIcons();
+
+  if (previewPlayer && previewReady) {
+    if (previewMuted) previewPlayer.mute();
+    else previewPlayer.unMute();
+  }
+}
+
+function startPreviewLoop() {
+  if (!previewPlayer || !previewReady) return;
+
+  const start = Number(beginTimeRange.value || 0);
+  const end = Number(endTimeRange.value || start + 1);
+
+  stopPreviewLoop();
+  previewLoopActive = true;
+  previewLoopLabel.textContent = 'Stop preview';
+  previewLoopToggle.querySelector('[data-lucide]')?.setAttribute('data-lucide', 'pause');
+  lucide.createIcons();
+
+  previewPlaceholder.classList.add('hidden');
+  previewPlayer.seekTo(start, true);
+  if (previewMuted) previewPlayer.mute();
+  else previewPlayer.unMute();
+  previewPlayer.playVideo();
+
+  previewLoopTimer = window.setInterval(() => {
+    if (!previewPlayer || !previewReady || !previewLoopActive) return;
+    const current = previewPlayer.getCurrentTime();
+    if (current >= end) {
+      previewPlayer.seekTo(start, true);
+      previewPlayer.playVideo();
+    }
+  }, 150);
+}
+
+function refreshPreviewFrame(second) {
+  previewPendingSeek = second;
+  stopPreviewLoop();
+
+  if (previewPlayer && previewReady) {
+    previewPlayerHost.classList.remove('hidden');
+    previewPlayer.seekTo(second, true);
+    previewPlayer.mute();
+    previewPlayer.playVideo();
+    window.setTimeout(() => {
+      if (!previewPlayer) return;
+      previewPlayer.pauseVideo();
+      previewPlayer.seekTo(second, true);
+    }, 120);
+  }
+}
+
+function setPreviewDuration(duration) {
+  previewDurationLimit = Math.max(0, Math.floor(duration || 0));
+  const maxValue = previewDurationLimit;
+  const previousMax = Math.max(0, Number(beginTimeRange.max) || 0);
+  const currentStart = previousMax > 0 ? Math.min(Number(beginTimeRange.value || 0), maxValue) : 0;
+  const currentEnd = previousMax > 0
+    ? Math.min(Math.max(Number(endTimeRange.value || maxValue), currentStart + 1), maxValue)
+    : maxValue;
+
+  beginTimeRange.max = String(maxValue);
+  endTimeRange.max = String(maxValue);
+  beginTimeRange.value = String(currentStart);
+  endTimeRange.value = String(currentEnd);
+  updateRangeVisuals();
+}
+
+function resetPreview() {
+  hide(previewPanel);
+  previewPlayerHost.classList.add('hidden');
+  previewReady = false;
+  previewPendingSeek = 3;
+  previewDurationLimit = 0;
+  previewMuted = true;
+  stopPreviewLoop();
+  beginTimeRange.max = '0';
+  endTimeRange.max = '0';
+  beginTimeRange.value = '0';
+  endTimeRange.value = '1';
+  updateRangeVisuals();
+  previewPlaceholder.innerHTML = `
+    <div class="flex items-center gap-2 rounded-full bg-black/40 px-4 py-2 text-sm font-medium backdrop-blur-sm">
+      <i data-lucide="play-circle" class="h-4 w-4"></i>
+      Preview loading
+    </div>
+  `;
+  lucide.createIcons();
+  updatePreviewSoundUI();
+
+  if (previewPlayer) {
+    previewPlayer.stopVideo();
+    previewPlayer.destroy();
+    previewPlayer = null;
+  }
+}
+
+function ensurePreviewPlayer(videoId) {
+  if (!window.YT || !window.YT.Player) return;
+
+  previewReady = false;
+  previewPendingSeek = Number(beginTimeInput.value || 3);
+  previewVideoId = videoId;
+
+  if (previewPlayer) {
+    previewPlayer.destroy();
+    previewPlayer = null;
+  }
+
+  previewPlayer = new window.YT.Player('video-player', {
+    videoId,
+    playerVars: {
+      autoplay: 0,
+      controls: 1,
+      modestbranding: 1,
+      rel: 0,
+      playsinline: 1,
+      start: previewPendingSeek,
+    },
+    events: {
+      onReady: (event) => {
+        const iframe = event.target.getIframe();
+        iframe.classList.remove('hidden');
+        iframe.classList.add('w-full', 'h-full');
+        previewReady = true;
+        previewPlayerHost.classList.remove('hidden');
+        previewPlaceholder.classList.add('hidden');
+        setPreviewDuration(event.target.getDuration());
+        updatePreviewSoundUI();
+        refreshPreviewFrame(previewPendingSeek);
+      },
+      onStateChange: (event) => {
+        if (event.data === window.YT.PlayerState.CUED) {
+          setPreviewDuration(event.target.getDuration());
+          refreshPreviewFrame(previewPendingSeek);
+        }
+      },
+    },
+  });
+}
+
+function updateVideoPreview() {
+  const value = urlInput.value.trim();
+  if (!value || !validateUrl(value)) {
+    resetPreview();
+    return;
+  }
+
+  const videoId = extractYouTubeVideoId(value);
+  if (!videoId) {
+    resetPreview();
+    return;
+  }
+
+  show(previewPanel);
+  previewPlaceholder.classList.remove('hidden');
+
+  if (previewVideoId !== videoId) {
+    ensurePreviewPlayer(videoId);
+  } else if (previewPlayer && previewReady) {
+    refreshPreviewFrame(Number(beginTimeRange.value || 0));
+  }
+}
+
+function handleStartRangeInput() {
+  const max = Math.max(0, Number(beginTimeRange.max) || 0);
+  const start = Math.min(Math.max(0, Number(beginTimeRange.value) || 0), max);
+  let end = Math.min(Math.max(0, Number(endTimeRange.value) || 0), max);
+
+  if (start >= end) {
+    end = Math.min(max, start + 1);
+    endTimeRange.value = String(end);
+  }
+
+  beginTimeRange.value = String(start);
+  updateRangeVisuals();
+  refreshPreviewFrame(start);
+}
+
+function handleEndRangeInput() {
+  const max = Math.max(0, Number(endTimeRange.max) || 0);
+  let end = Math.min(Math.max(0, Number(endTimeRange.value) || 0), max);
+  let start = Math.min(Math.max(0, Number(beginTimeRange.value) || 0), max);
+
+  if (end <= start) {
+    start = Math.max(0, end - 1);
+    beginTimeRange.value = String(start);
+  }
+
+  endTimeRange.value = String(end);
+  updateRangeVisuals();
+  stopPreviewLoop();
+}
 
 function setConverting(loading) {
   submitBtn.disabled = loading;
@@ -136,7 +431,25 @@ urlInput.addEventListener('input', () => {
   } else {
     urlError.classList.add('hidden');
   }
+  updateVideoPreview();
 });
+
+beginTimeRange.addEventListener('input', handleStartRangeInput);
+endTimeRange.addEventListener('input', handleEndRangeInput);
+previewLoopToggle.addEventListener('click', () => {
+  if (previewLoopActive) {
+    stopPreviewLoop();
+  } else {
+    startPreviewLoop();
+  }
+});
+previewSoundToggle.addEventListener('click', () => {
+  previewMuted = !previewMuted;
+  updatePreviewSoundUI();
+});
+
+updateRangeVisuals();
+updatePreviewSoundUI();
 
 // ── Form submit ────────────────────────────────────────────
 form.addEventListener('submit', async (e) => {
@@ -161,7 +474,6 @@ form.addEventListener('submit', async (e) => {
     beginTime: document.getElementById('beginTime').value !== '' ? document.getElementById('beginTime').value : null,
     duration:  document.getElementById('duration').value  || null,
     verbose:   document.getElementById('verbose').checked,
-    thumb:     document.getElementById('thumb').checked,
   };
 
   let jobId;
