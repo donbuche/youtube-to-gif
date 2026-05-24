@@ -1,6 +1,6 @@
 # YouTube to GIF
 
-<img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
+<a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
 <img src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&amp;logoColor=white" alt="Node.js" />
 <img src="https://img.shields.io/badge/Express-4.18-000000?logo=express&amp;logoColor=white" alt="Express" />
 <img src="https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?logo=tailwindcss&amp;logoColor=white" alt="Tailwind CSS" />
@@ -182,7 +182,7 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 ## License
 
-[MIT](LICENSE)
+[MIT License](./LICENSE)
 
 ---
 
